@@ -1,12 +1,10 @@
 import { http, createConfig } from "wagmi"
 import { arbitrum, mainnet } from "wagmi/chains"
-import { injected, metaMask, coinbaseWallet } from "wagmi/connectors"
-
-const projectId = "YOUR_WALLETCONNECT_PROJECT_ID" // 可选：用于WalletConnect
+import { injected } from "wagmi/connectors"
 
 export const config = createConfig({
   chains: [arbitrum, mainnet],
-  connectors: [injected(), metaMask(), coinbaseWallet({ appName: "Web3 DApp" })],
+  connectors: [injected()],
   transports: {
     [arbitrum.id]: http(),
     [mainnet.id]: http(),
