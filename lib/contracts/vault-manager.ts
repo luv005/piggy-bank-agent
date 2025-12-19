@@ -175,4 +175,3 @@ export const vaultManagerAbi = [
     outputs: [{ name: "", type: "uint256" }],
   },
 ] as const
-

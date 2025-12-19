@@ -11,4 +11,3 @@ interface Vm {
     function expectRevert(bytes4 revertData) external;
     function expectRevert(bytes calldata revertData) external;
 }
-

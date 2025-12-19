@@ -41,4 +41,3 @@ export const erc20Abi = [
     outputs: [{ name: "", type: "bool" }],
   },
 ] as const
-

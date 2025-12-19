@@ -56,4 +56,3 @@ contract MockERC20 {
         emit Transfer(from, to, amount);
     }
 }
-

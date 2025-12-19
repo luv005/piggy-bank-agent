@@ -153,4 +153,3 @@ contract VaultManagerTest is TestBase {
         manager.withdrawFees(address(tokenA), ALICE, fee);
     }
 }
-

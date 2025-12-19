@@ -25,4 +25,3 @@ abstract contract Ownable {
         owner = newOwner;
     }
 }
-

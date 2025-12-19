@@ -18,4 +18,3 @@ export function getVaultManagerAddress(chainId: number | undefined): Address | u
   if (!chainId) return undefined
   return vaultManagerAddressByChainId[chainId]
 }
-

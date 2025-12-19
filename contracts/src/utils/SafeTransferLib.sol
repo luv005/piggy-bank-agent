@@ -21,4 +21,3 @@ library SafeTransferLib {
         if (!success || (data.length != 0 && !abi.decode(data, (bool)))) revert TransferFromFailed();
     }
 }
-
