@@ -1,6 +1,15 @@
 export const vaultManagerAbi = [
   {
     type: "event",
+    name: "TokenWhitelistUpdated",
+    inputs: [
+      { name: "token", type: "address", indexed: true },
+      { name: "allowed", type: "bool", indexed: false },
+    ],
+    anonymous: false,
+  },
+  {
+    type: "event",
     name: "VaultCreated",
     inputs: [
       { name: "vaultId", type: "uint256", indexed: true },
@@ -27,6 +36,16 @@ export const vaultManagerAbi = [
       { name: "vaultId", type: "uint256", indexed: true },
       { name: "owner", type: "address", indexed: true },
       { name: "matured", type: "bool", indexed: false },
+    ],
+    anonymous: false,
+  },
+  {
+    type: "event",
+    name: "FeesWithdrawn",
+    inputs: [
+      { name: "token", type: "address", indexed: true },
+      { name: "to", type: "address", indexed: true },
+      { name: "amount", type: "uint256", indexed: false },
     ],
     anonymous: false,
   },

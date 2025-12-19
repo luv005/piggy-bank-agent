@@ -1,14 +1,23 @@
 "use client"
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { isAddress, parseUnits, formatUnits } from "viem"
+import { isAddress, parseUnits, formatUnits, parseAbiItem } from "viem"
 import { useAccount, useChainId, usePublicClient, useWalletClient } from "wagmi"
-import { RefreshCw } from "lucide-react"
+import { ChevronDown, RefreshCw } from "lucide-react"
 import { DotLottieReact } from "@lottiefiles/dotlottie-react"
 
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { Input } from "@/components/ui/input"
 import { erc20Abi } from "@/lib/contracts/erc20"
 import { getVaultManagerAddress, type Address } from "@/lib/contracts/addresses"
@@ -63,6 +72,40 @@ type VaultDetails = {
   tokens: VaultTokenPosition[]
 }
 
+type WhitelistedTokenOption = { token: Address } & TokenMeta
+
+const tokenWhitelistUpdatedEvent = parseAbiItem("event TokenWhitelistUpdated(address indexed token, bool allowed)")
+
+async function detectContractDeploymentBlock(publicClient: unknown, contractAddress: Address, latestBlock: bigint) {
+  const client = publicClient as any
+  const getBytecode = async (blockNumber: bigint) => {
+    if (typeof client?.getBytecode === "function") return (await client.getBytecode({ address: contractAddress, blockNumber })) as string
+    if (typeof client?.getCode === "function") return (await client.getCode({ address: contractAddress, blockNumber })) as string
+    throw new Error("RPC client missing getBytecode/getCode")
+  }
+
+  const hasCodeAt = async (blockNumber: bigint) => {
+    try {
+      const bytecode = await getBytecode(blockNumber)
+      return !!bytecode && bytecode !== "0x"
+    } catch {
+      return false
+    }
+  }
+
+  if (!(await hasCodeAt(latestBlock))) return null
+
+  let low = 0n
+  let high = latestBlock
+  while (low < high) {
+    const mid = (low + high) / 2n
+    if (await hasCodeAt(mid)) high = mid
+    else low = mid + 1n
+  }
+
+  return low
+}
+
 export function VaultManagerDemo() {
   const { address, isConnected } = useAccount()
   const chainId = useChainId()
@@ -84,6 +127,7 @@ export function VaultManagerDemo() {
   const [tokenDecimals, setTokenDecimals] = useState<number | null>(null)
   const [tokenWhitelisted, setTokenWhitelisted] = useState<boolean | null>(null)
   const [allowance, setAllowance] = useState<bigint | null>(null)
+  const [tokenBalance, setTokenBalance] = useState<bigint | null>(null)
 
   const [myVaultIds, setMyVaultIds] = useState<bigint[]>([])
   const [lastCreatedVaultId, setLastCreatedVaultId] = useState<bigint | null>(null)
@@ -92,6 +136,12 @@ export function VaultManagerDemo() {
 
   const tokenMetaCacheRef = useRef<Map<Address, TokenMeta>>(new Map())
   const vaultListRequestIdRef = useRef(0)
+  const [whitelistedTokens, setWhitelistedTokens] = useState<WhitelistedTokenOption[]>([])
+  const [whitelistLoading, setWhitelistLoading] = useState(false)
+  const [whitelistError, setWhitelistError] = useState<string | null>(null)
+
+  const whitelistRequestIdRef = useRef(0)
+  const deployBlockCacheRef = useRef<Map<string, bigint>>(new Map())
 
   const [breakVaultId, setBreakVaultId] = useState("")
   const [breakVaultPreview, setBreakVaultPreview] = useState<{
@@ -103,6 +153,10 @@ export function VaultManagerDemo() {
   const normalizedTokenAddress = tokenAddress.trim()
   const tokenAddressValid = isAddress(normalizedTokenAddress)
   const tokenAddressTyped = (tokenAddressValid ? (normalizedTokenAddress as Address) : undefined) satisfies Address | undefined
+  const selectedWhitelistedToken = useMemo(() => {
+    if (!tokenAddressTyped) return null
+    return whitelistedTokens.find((t) => t.token.toLowerCase() === tokenAddressTyped.toLowerCase()) ?? null
+  }, [tokenAddressTyped, whitelistedTokens])
 
   const unlockTimestamp = useMemo(() => {
     const minutes = Number(unlockMinutes)
@@ -135,6 +189,57 @@ export function VaultManagerDemo() {
     setMyVaultIds(idsArray)
     return idsArray
   }, [address, publicClient, vaultManagerAddress])
+
+  const ensureTokenMeta = useCallback(
+    async (tokens: Address[]) => {
+      if (!publicClient) return
+      const tokensToFetchMeta = tokens.filter((token) => !tokenMetaCacheRef.current.has(token))
+      if (!tokensToFetchMeta.length) return
+
+      try {
+        const metaCalls = tokensToFetchMeta.flatMap(
+          (token) =>
+            [
+              { address: token, abi: erc20Abi, functionName: "symbol" as const },
+              { address: token, abi: erc20Abi, functionName: "decimals" as const },
+            ] as const,
+        )
+        const results = await (publicClient as any).multicall({
+          contracts: metaCalls,
+          allowFailure: true,
+        })
+
+        for (let i = 0; i < tokensToFetchMeta.length; i++) {
+          const symbolResult = results[i * 2]
+          const decimalsResult = results[i * 2 + 1]
+
+          const symbol = symbolResult?.status === "success" ? (symbolResult.result as string) : null
+          const decimalsRaw = decimalsResult?.status === "success" ? (decimalsResult.result as unknown) : null
+          const decimals =
+            decimalsRaw == null ? null : typeof decimalsRaw === "bigint" ? Number(decimalsRaw) : (decimalsRaw as number)
+
+          tokenMetaCacheRef.current.set(tokensToFetchMeta[i], { symbol, decimals })
+        }
+      } catch {
+        await Promise.all(
+          tokensToFetchMeta.map(async (token) => {
+            const [symbolResult, decimalsResult] = await Promise.allSettled([
+              publicClient.readContract({ address: token, abi: erc20Abi, functionName: "symbol" }),
+              publicClient.readContract({ address: token, abi: erc20Abi, functionName: "decimals" }),
+            ])
+
+            const symbol = symbolResult.status === "fulfilled" ? (symbolResult.value as string) : null
+            const decimalsRaw = decimalsResult.status === "fulfilled" ? (decimalsResult.value as unknown) : null
+            const decimals =
+              decimalsRaw == null ? null : typeof decimalsRaw === "bigint" ? Number(decimalsRaw) : (decimalsRaw as number)
+
+            tokenMetaCacheRef.current.set(token, { symbol, decimals })
+          }),
+        )
+      }
+    },
+    [publicClient],
+  )
 
   const refreshMyVaults = useCallback(async () => {
     if (!publicClient || !vaultManagerAddress || !address) {
@@ -181,55 +286,7 @@ export function VaultManagerDemo() {
         for (const token of vault.tokenAddresses as Address[]) uniqueTokenMap.set(token.toLowerCase(), token)
       }
       const uniqueTokens = Array.from(uniqueTokenMap.values())
-      const tokensToFetchMeta = uniqueTokens.filter((token) => !tokenMetaCacheRef.current.has(token))
-
-      if (tokensToFetchMeta.length) {
-        try {
-          const metaCalls = tokensToFetchMeta.flatMap(
-            (token) =>
-              [
-                { address: token, abi: erc20Abi, functionName: "symbol" as const },
-                { address: token, abi: erc20Abi, functionName: "decimals" as const },
-              ] as const,
-          )
-          const results = await (publicClient as any).multicall({
-            contracts: metaCalls,
-            allowFailure: true,
-          })
-
-          for (let i = 0; i < tokensToFetchMeta.length; i++) {
-            const symbolResult = results[i * 2]
-            const decimalsResult = results[i * 2 + 1]
-
-            const symbol = symbolResult?.status === "success" ? (symbolResult.result as string) : null
-            const decimalsRaw = decimalsResult?.status === "success" ? (decimalsResult.result as unknown) : null
-            const decimals =
-              decimalsRaw == null ? null : typeof decimalsRaw === "bigint" ? Number(decimalsRaw) : (decimalsRaw as number)
-
-            tokenMetaCacheRef.current.set(tokensToFetchMeta[i], { symbol, decimals })
-          }
-        } catch {
-          await Promise.all(
-            tokensToFetchMeta.map(async (token) => {
-              const [symbolResult, decimalsResult] = await Promise.allSettled([
-                publicClient.readContract({ address: token, abi: erc20Abi, functionName: "symbol" }),
-                publicClient.readContract({ address: token, abi: erc20Abi, functionName: "decimals" }),
-              ])
-
-              const symbol = symbolResult.status === "fulfilled" ? (symbolResult.value as string) : null
-              const decimalsRaw = decimalsResult.status === "fulfilled" ? (decimalsResult.value as unknown) : null
-              const decimals =
-                decimalsRaw == null
-                  ? null
-                  : typeof decimalsRaw === "bigint"
-                    ? Number(decimalsRaw)
-                    : (decimalsRaw as number)
-
-              tokenMetaCacheRef.current.set(token, { symbol, decimals })
-            }),
-          )
-        }
-      }
+      await ensureTokenMeta(uniqueTokens)
 
       const balanceCalls: { vaultId: bigint; token: Address }[] = []
       for (const vault of vaultBaseList) {
@@ -290,17 +347,101 @@ export function VaultManagerDemo() {
     } finally {
       if (requestId === vaultListRequestIdRef.current) setVaultListLoading(false)
     }
-  }, [address, publicClient, refreshVaultIds, vaultManagerAddress])
+  }, [address, ensureTokenMeta, publicClient, refreshVaultIds, vaultManagerAddress])
+
+  const refreshWhitelistedTokens = useCallback(async () => {
+    if (!publicClient || !vaultManagerAddress) {
+      setWhitelistedTokens([])
+      return []
+    }
+
+    const requestId = ++whitelistRequestIdRef.current
+    setWhitelistLoading(true)
+    setWhitelistError(null)
+
+    try {
+      const latestBlock = await publicClient.getBlockNumber()
+      const cacheKey = `${chainId}:${vaultManagerAddress.toLowerCase()}`
+
+      let fromBlock = deployBlockCacheRef.current.get(cacheKey) ?? null
+      if (fromBlock == null) {
+        fromBlock = await detectContractDeploymentBlock(publicClient, vaultManagerAddress, latestBlock)
+        if (fromBlock != null) deployBlockCacheRef.current.set(cacheKey, fromBlock)
+      }
+
+      if (fromBlock == null) {
+        const fallbackSpan = 200_000n
+        fromBlock = latestBlock > fallbackSpan ? latestBlock - fallbackSpan : 0n
+      }
+
+      let logs: unknown[] = []
+      try {
+        logs = await publicClient.getLogs({
+          address: vaultManagerAddress,
+          event: tokenWhitelistUpdatedEvent,
+          fromBlock,
+          toBlock: latestBlock,
+        })
+      } catch {
+        const chunkSize = 50_000n
+        for (let start = fromBlock; start <= latestBlock; start += chunkSize) {
+          if (requestId !== whitelistRequestIdRef.current) return []
+          const end = start + chunkSize - 1n > latestBlock ? latestBlock : start + chunkSize - 1n
+          const chunk = await publicClient.getLogs({
+            address: vaultManagerAddress,
+            event: tokenWhitelistUpdatedEvent,
+            fromBlock: start,
+            toBlock: end,
+          })
+          logs.push(...chunk)
+        }
+      }
+
+      const tokenByLower = new Map<string, Address>()
+      const allowedByLower = new Map<string, boolean>()
+      for (const log of logs as any[]) {
+        const token = (log as any).args?.token as Address | undefined
+        const allowed = (log as any).args?.allowed as boolean | undefined
+        if (!token || typeof allowed !== "boolean") continue
+        const key = token.toLowerCase()
+        tokenByLower.set(key, token)
+        allowedByLower.set(key, allowed)
+      }
+
+      const allowedTokens = Array.from(allowedByLower.entries())
+        .filter(([, allowed]) => allowed)
+        .map(([key]) => tokenByLower.get(key)!)
+
+      await ensureTokenMeta(allowedTokens)
+
+      const options = allowedTokens
+        .map((token) => {
+          const meta = tokenMetaCacheRef.current.get(token) ?? { symbol: null, decimals: null }
+          return { token, ...meta } satisfies WhitelistedTokenOption
+        })
+        .sort((a, b) => (a.symbol ?? a.token).localeCompare(b.symbol ?? b.token))
+
+      if (requestId !== whitelistRequestIdRef.current) return []
+      setWhitelistedTokens(options)
+      return options
+    } catch (err) {
+      if (requestId === whitelistRequestIdRef.current) setWhitelistError(toErrorMessage(err))
+      return []
+    } finally {
+      if (requestId === whitelistRequestIdRef.current) setWhitelistLoading(false)
+    }
+  }, [chainId, ensureTokenMeta, publicClient, vaultManagerAddress])
 
   const refreshTokenInfo = useCallback(async () => {
     setTokenSymbol(null)
     setTokenDecimals(null)
     setTokenWhitelisted(null)
     setAllowance(null)
+    setTokenBalance(null)
 
     if (!publicClient || !vaultManagerAddress || !tokenAddressTyped) return
 
-    const [decimalsRaw, symbol, whitelisted] = await Promise.all([
+    const [decimalsRaw, symbol, whitelisted, balanceOf, currentAllowance] = await Promise.all([
       publicClient.readContract({
         address: tokenAddressTyped,
         abi: erc20Abi,
@@ -317,21 +458,30 @@ export function VaultManagerDemo() {
         functionName: "isTokenWhitelisted",
         args: [tokenAddressTyped],
       }),
+      address
+        ? publicClient.readContract({
+            address: tokenAddressTyped,
+            abi: erc20Abi,
+            functionName: "balanceOf",
+            args: [address],
+          })
+        : Promise.resolve(null),
+      address
+        ? publicClient.readContract({
+            address: tokenAddressTyped,
+            abi: erc20Abi,
+            functionName: "allowance",
+            args: [address, vaultManagerAddress],
+          })
+        : Promise.resolve(null),
     ])
 
     const decimals = typeof decimalsRaw === "bigint" ? Number(decimalsRaw) : decimalsRaw
     setTokenDecimals(decimals)
     setTokenSymbol(symbol)
     setTokenWhitelisted(whitelisted)
-
-    if (!address) return
-    const currentAllowance = await publicClient.readContract({
-      address: tokenAddressTyped,
-      abi: erc20Abi,
-      functionName: "allowance",
-      args: [address, vaultManagerAddress],
-    })
-    setAllowance(currentAllowance)
+    setTokenBalance(balanceOf as bigint | null)
+    setAllowance(currentAllowance as bigint | null)
   }, [address, publicClient, tokenAddressTyped, vaultManagerAddress])
 
   useEffect(() => {
@@ -341,13 +491,31 @@ export function VaultManagerDemo() {
       setTokenDecimals(null)
       setTokenWhitelisted(null)
       setAllowance(null)
+      setTokenBalance(null)
       return
     }
     refreshTokenInfo().catch((err) => setError(toErrorMessage(err)))
   }, [refreshTokenInfo, tokenAddressValid])
 
   useEffect(() => {
+    vaultListRequestIdRef.current += 1
+    whitelistRequestIdRef.current += 1
+    tokenMetaCacheRef.current.clear()
+    deployBlockCacheRef.current.clear()
+    setWhitelistedTokens([])
+    setWhitelistError(null)
+    setWhitelistLoading(false)
+    setTokenAddress("")
+    setAmount("")
+    setTokenBalance(null)
+    setMyVaultIds([])
+    setMyVaults([])
+    setLastCreatedVaultId(null)
+  }, [chainId])
+
+  useEffect(() => {
     if (!isConnected) {
+      vaultListRequestIdRef.current += 1
       setMyVaultIds([])
       setMyVaults([])
       setLastCreatedVaultId(null)
@@ -357,11 +525,14 @@ export function VaultManagerDemo() {
   }, [isConnected, refreshMyVaults])
 
   useEffect(() => {
-    tokenMetaCacheRef.current.clear()
-    setMyVaultIds([])
-    setMyVaults([])
-    setLastCreatedVaultId(null)
-  }, [chainId])
+    refreshWhitelistedTokens().catch(() => undefined)
+  }, [refreshWhitelistedTokens])
+
+  useEffect(() => {
+    if (!whitelistedTokens.length) return
+    if (tokenAddress.trim()) return
+    setTokenAddress(whitelistedTokens[0].token)
+  }, [tokenAddress, whitelistedTokens])
 
   const approve = useCallback(async () => {
     setError(null)
@@ -416,6 +587,7 @@ export function VaultManagerDemo() {
     if (!tokenAddressTyped) return setError("Token 地址不合法")
     if (!unlockTimestamp) return setError("解锁时间不合法")
     if (!parsedAmount || parsedAmount <= 0n) return setError("金额不合法")
+    if (tokenBalance != null && parsedAmount > tokenBalance) return setError("余额不足")
     if (tokenWhitelisted === false) return setError("该 Token 未被 VaultManager 加入白名单")
     if (allowance != null && allowance < parsedAmount) return setError("授权额度不足，请先 Approve")
 
@@ -452,6 +624,7 @@ export function VaultManagerDemo() {
     publicClient,
     refreshTokenInfo,
     refreshMyVaults,
+    tokenBalance,
     tokenAddressTyped,
     tokenWhitelisted,
     unlockTimestamp,
@@ -543,6 +716,16 @@ export function VaultManagerDemo() {
     return formatUnits(allowance, tokenDecimals)
   }, [allowance, tokenDecimals])
 
+  const tokenBalanceHuman = useMemo(() => {
+    if (!isConnected || tokenBalance == null || tokenDecimals == null) return null
+    return formatUnitsTruncated(tokenBalance, tokenDecimals)
+  }, [isConnected, tokenBalance, tokenDecimals])
+
+  const fillMaxAmount = useCallback(() => {
+    if (!isConnected || tokenBalance == null || tokenDecimals == null) return
+    setAmount(formatUnits(tokenBalance, tokenDecimals))
+  }, [isConnected, tokenBalance, tokenDecimals])
+
   const nowSeconds = Math.floor(Date.now() / 1000)
   const unlockHuman = useMemo(() => {
     if (!unlockTimestamp) return null
@@ -626,19 +809,108 @@ export function VaultManagerDemo() {
               <Input value={unlockMinutes} onChange={(e) => setUnlockMinutes(e.target.value)} inputMode="numeric" />
             </div>
             <div className="sm:col-span-2 space-y-1">
-              <label className="text-xs text-muted-foreground">ERC20 Token 地址（需在白名单）</label>
-              <Input
-                value={tokenAddress}
-                onChange={(e) => setTokenAddress(e.target.value)}
-                placeholder="0x…"
-                className={tokenAddress && !tokenAddressValid ? "border-destructive" : ""}
-              />
+              <div className="flex items-center justify-between gap-2">
+                <label className="text-xs text-muted-foreground">ERC20 Token（白名单）</label>
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  onClick={() => refreshWhitelistedTokens().catch((err) => setWhitelistError(toErrorMessage(err)))}
+                  disabled={!vaultManagerAddress || whitelistLoading}
+                >
+                  <RefreshCw className={`h-4 w-4 ${whitelistLoading ? "animate-spin" : ""}`} />
+                </Button>
+              </div>
+
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="outline" className="w-full justify-between bg-transparent" disabled={!vaultManagerAddress}>
+                    <div className="flex flex-col items-start">
+                      <span className="font-medium">
+                        {selectedWhitelistedToken
+                          ? selectedWhitelistedToken.symbol ?? shortenAddress(selectedWhitelistedToken.token)
+                          : whitelistLoading
+                            ? "加载白名单中…"
+                            : whitelistedTokens.length
+                              ? "请选择 Token"
+                              : "暂无白名单 Token"}
+                      </span>
+                      <span className="font-mono text-[11px] text-muted-foreground">
+                        {tokenAddressTyped
+                          ? shortenAddress(tokenAddressTyped)
+                          : whitelistLoading
+                            ? "正在读取合约白名单…"
+                            : whitelistError
+                              ? "白名单读取失败"
+                              : vaultManagerAddress
+                                ? "仅显示白名单 Token"
+                                : "当前网络未配置"}
+                      </span>
+                    </div>
+                    <ChevronDown className="h-4 w-4 opacity-50" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start" className="w-[--radix-dropdown-menu-trigger-width]">
+                  {whitelistedTokens.length ? (
+                    <DropdownMenuRadioGroup value={tokenAddressTyped ?? ""} onValueChange={(value) => setTokenAddress(value)}>
+                      {whitelistedTokens.map((t) => {
+                        const label = t.symbol ?? shortenAddress(t.token)
+                        return (
+                          <DropdownMenuRadioItem key={t.token} value={t.token} className="py-2">
+                            <div className="flex w-full items-center justify-between gap-2">
+                              <span className="font-medium">{label}</span>
+                              <span className="font-mono text-xs text-muted-foreground">{shortenAddress(t.token)}</span>
+                            </div>
+                          </DropdownMenuRadioItem>
+                        )
+                      })}
+                    </DropdownMenuRadioGroup>
+                  ) : (
+                    <div className="px-2 py-2 text-sm text-muted-foreground">
+                      {whitelistLoading ? "加载中…" : whitelistError ? "加载失败，请刷新重试" : "暂无白名单 Token"}
+                    </div>
+                  )}
+
+                  {whitelistError ? <div className="px-2 pb-2 text-xs text-destructive">{whitelistError}</div> : null}
+
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem
+                    onSelect={() => refreshWhitelistedTokens().catch((err) => setWhitelistError(toErrorMessage(err)))}
+                    disabled={!vaultManagerAddress || whitelistLoading}
+                  >
+                    <RefreshCw className={`h-4 w-4 ${whitelistLoading ? "animate-spin" : ""}`} />
+                    刷新白名单
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+
+              {!vaultManagerAddress ? (
+                <div className="text-xs text-muted-foreground">当前网络未配置 VaultManager 地址</div>
+              ) : whitelistError ? (
+                <div className="text-xs text-destructive">{whitelistError}</div>
+              ) : null}
             </div>
           </div>
 
           <div className="grid gap-3 sm:grid-cols-3">
             <div className="space-y-1">
-              <label className="text-xs text-muted-foreground">数量</label>
+              <div className="flex items-center justify-between gap-2">
+                <label className="text-xs text-muted-foreground">数量</label>
+                <div className="flex items-center gap-2">
+                  <span className="text-[11px] text-muted-foreground">
+                    余额：{tokenBalanceHuman ?? "-"}
+                    {tokenSymbol ? <span className="ml-1">{tokenSymbol}</span> : null}
+                  </span>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-6 px-2"
+                    onClick={fillMaxAmount}
+                    disabled={!isConnected || busy || tokenBalance == null || tokenDecimals == null}
+                  >
+                    MAX
+                  </Button>
+                </div>
+              </div>
               <Input value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0.0" inputMode="decimal" />
             </div>
             <div className="sm:col-span-2 space-y-1">
@@ -656,6 +928,7 @@ export function VaultManagerDemo() {
                 <div>Decimals：{tokenDecimals ?? "-"}</div>
                 <div>白名单：{tokenWhitelisted == null ? "-" : tokenWhitelisted ? "是" : "否"}</div>
                 <div>Allowance：{allowanceHuman ?? "-"}</div>
+                <div>余额：{tokenBalanceHuman ?? "-"}</div>
                 <div>
                   解锁时间戳：{" "}
                   {unlockTimestamp ? (
