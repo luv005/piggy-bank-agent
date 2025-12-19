@@ -25,6 +25,7 @@ SYSTEM_INSTRUCTION = os.getenv(
     "being a pig) but remains very clear and pleasant to listen to. Think of a mix between Winnie the Pooh and "
     "Baymax. It sounds optimistic, patient, and soothing for children. Please respond to the child.",
 )
+DEFAULT_OAUTH_SCOPE = "https://www.googleapis.com/auth/generative-language"
 SETUP_TIMEOUT_SECONDS = float(os.getenv("GEMINI_SETUP_TIMEOUT", "15"))
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
@@ -52,7 +53,7 @@ async def _load_default_credentials():
     def _load():
         credentials, _ = google.auth.default()
         if getattr(credentials, "requires_scopes", False):
-            scope = os.getenv("GEMINI_OAUTH_SCOPE", "https://www.googleapis.com/auth/generative-language")
+            scope = os.getenv("GEMINI_OAUTH_SCOPE", DEFAULT_OAUTH_SCOPE)
             credentials = credentials.with_scopes([scope])
         return credentials
 
@@ -68,8 +69,19 @@ async def get_access_token() -> str:
     if os.getenv("GEMINI_API_KEY"):
         raise RuntimeError("API keys are not supported for Gemini Live API WebSocket. Use OAuth2.")
 
+    scope = os.getenv("GEMINI_OAUTH_SCOPE", DEFAULT_OAUTH_SCOPE)
+
     async with _token_lock:
         credentials = await _load_default_credentials()
+        if hasattr(credentials, "has_scopes"):
+            scopes = getattr(credentials, "scopes", None)
+            default_scopes = getattr(credentials, "default_scopes", None)
+            if (scopes or default_scopes) and not credentials.has_scopes([scope]):
+                raise RuntimeError(
+                    "ADC missing required scope. Run: gcloud auth application-default login "
+                    f"--scopes={scope},https://www.googleapis.com/auth/cloud-platform "
+                    "or set GEMINI_ACCESS_TOKEN."
+                )
         if not credentials.valid:
             await asyncio.to_thread(credentials.refresh, Request())
 
