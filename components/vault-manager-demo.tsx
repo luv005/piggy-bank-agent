@@ -3,7 +3,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
 import { isAddress, parseUnits, formatUnits } from "viem"
 import { useAccount, useChainId, usePublicClient, useWalletClient } from "wagmi"
-import { RefreshCw } from "lucide-react"
+import { ChevronDown, RefreshCw } from "lucide-react"
+import { DotLottieReact } from "@lottiefiles/dotlottie-react"
 
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -336,6 +337,14 @@ export function VaultManagerDemo() {
   return (
     <Card className="w-full max-w-2xl border-2 border-[#28a0f0]/20 bg-gradient-to-br from-background to-[#28a0f0]/5">
       <CardHeader>
+        <div className="flex justify-center mb-4">
+          <DotLottieReact
+            src="/lotties/piggy-deposit.json"
+            loop
+            autoplay
+            style={{ width: 120, height: 120 }}
+          />
+        </div>
         <CardTitle className="text-xl">VaultManager 演示</CardTitle>
         <CardDescription>
           创建时间锁 Vault，存入 ERC20，到期后 Break 全额取回；提前 Break 则返还 95%，5% 作为项目收益留在合约里。
