@@ -7,6 +7,12 @@ import Image from "next/image"
 import Link from "next/link"
 import { Menu, Plus, MessageSquare, Wallet, RefreshCw } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import {
+  Dialog,
+  DialogContent,
+  DialogTitle,
+  DialogDescription,
+} from "@/components/ui/dialog"
 import { getVaultManagerAddress, type Address } from "@/lib/contracts/addresses"
 import { vaultManagerAbi } from "@/lib/contracts/vault-manager"
 import { erc20Abi } from "@/lib/contracts/erc20"
@@ -61,6 +67,7 @@ export default function VaultPage() {
   const [vault, setVault] = useState<VaultDetails | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [breakDialogOpen, setBreakDialogOpen] = useState(false)
 
   // Goal from localStorage
   const [targetBTC, setTargetBTC] = useState(1.0)
@@ -458,12 +465,12 @@ export default function VaultPage() {
             >
               Interaction
             </Link>
-            <Link
-              href="/broken"
+            <button
+              onClick={() => setBreakDialogOpen(true)}
               className="flex items-center justify-center rounded-2xl border border-red-200 bg-red-50 py-3 font-medium text-red-500"
             >
               Break Piggy
-            </Link>
+            </button>
           </div>
         </div>
 
@@ -478,6 +485,47 @@ export default function VaultPage() {
           Refresh
         </Button>
       </div>
+
+      {/* Break Piggy Confirmation Dialog */}
+      <Dialog open={breakDialogOpen} onOpenChange={setBreakDialogOpen}>
+        <DialogContent showCloseButton={false} className="max-w-sm rounded-3xl border-0 bg-white p-8 text-center shadow-xl">
+          {/* Piggy Icon */}
+          <div className="mx-auto mb-4 flex h-20 w-20 items-center justify-center rounded-full bg-red-50">
+            <div className="flex h-12 w-12 items-center justify-center rounded-full border-4 border-red-300">
+              <div className="h-3 w-3 rounded-full bg-red-400" />
+            </div>
+          </div>
+
+          <DialogTitle className="mb-2 text-2xl font-bold text-slate-900">
+            Break the Piggy?
+          </DialogTitle>
+          <DialogDescription className="mb-6 text-slate-500">
+            Are you sure? This will withdraw{" "}
+            <span className="font-bold text-slate-900">
+              {totalSavings.btc.toFixed(4)} {vault?.tokens[0]?.symbol || "BTC"}
+            </span>
+            .
+          </DialogDescription>
+
+          {/* Action Buttons */}
+          <div className="flex gap-3">
+            <Button
+              variant="outline"
+              className="flex-1 rounded-xl border-slate-200 py-6 font-semibold text-slate-700 hover:bg-slate-50"
+              onClick={() => setBreakDialogOpen(false)}
+            >
+              Keep Saving
+            </Button>
+            <Link
+              href="/broken"
+              className="flex flex-1 items-center justify-center rounded-xl bg-red-500 py-6 font-semibold text-white hover:bg-red-600"
+              onClick={() => setBreakDialogOpen(false)}
+            >
+              Break It
+            </Link>
+          </div>
+        </DialogContent>
+      </Dialog>
     </main>
   )
 }

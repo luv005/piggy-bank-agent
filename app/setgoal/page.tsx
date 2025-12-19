@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react"
 import Link from "next/link"
 import { Menu } from "lucide-react"
+import { DotLottieReact } from "@lottiefiles/dotlottie-react"
 import { Button } from "@/components/ui/button"
 import { Slider } from "@/components/ui/slider"
 
@@ -67,8 +68,12 @@ export default function SetGoalPage() {
       {/* Content */}
       <div className="flex flex-col items-center px-6 py-6">
         {/* Bitcoin Icon */}
-        <div className="mb-4 flex h-24 w-24 items-center justify-center rounded-full bg-orange-100">
-          <span className="text-4xl text-orange-500">₿</span>
+        <div className="mb-4 flex h-48 w-48 items-center justify-center">
+          <DotLottieReact
+            src="/lotties/deposit.json"
+            loop
+            autoplay
+          />
         </div>
 
         {/* Target Goal Label */}

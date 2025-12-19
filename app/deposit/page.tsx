@@ -368,12 +368,12 @@ export default function DepositPage() {
       <div className="flex flex-col items-center px-6 py-8">
         {/* Piggy Icon with Plus */}
         <div className="relative mb-8">
-          <div className="flex h-32 w-32 items-center justify-center">
+          <div className="flex h-48 w-48 items-center justify-center">
             <DotLottieReact
-              src="/lotties/piggy-deposit.json"
+              src="/lotties/deposit.json"
               loop
               autoplay
-              style={{ width: "128px", height: "128px" }}
+              style={{ width: "240px", height: "240px" }}
             />
           </div>
         </div>
@@ -399,7 +399,7 @@ export default function DepositPage() {
         </div>
 
         {/* Custom Amount */}
-        <div className="mb-4 w-full max-w-md">
+        <div className="mb-4">
           <p className="mb-3 text-sm font-medium tracking-widest text-slate-500">CUSTOM AMOUNT</p>
           <div className="flex items-center rounded-2xl bg-slate-100 px-6 py-4">
             <input
@@ -410,9 +410,6 @@ export default function DepositPage() {
               placeholder="0.0000"
               className="flex-1 bg-transparent text-center text-4xl font-bold text-slate-400 placeholder-slate-300 outline-none"
             />
-            <span className="ml-4 text-lg font-medium text-slate-500">
-              {selectedToken?.symbol || "BTC"}
-            </span>
           </div>
         </div>
 
